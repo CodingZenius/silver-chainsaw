@@ -1,0 +1,343 @@
+package com.tekivy.engine
+
+import android.content.Context
+import android.opengl.GLES20
+import android.opengl.GLSurfaceView
+import android.opengl.Matrix
+import android.view.GestureDetector
+import android.view.MotionEvent
+import android.view.ScaleGestureDetector
+import com.chaquo.python.PyObject
+import com.chaquo.python.Python
+import org.json.JSONObject
+import java.io.File
+import java.nio.ByteBuffer
+import java.nio.ByteOrder
+import java.nio.FloatBuffer
+import java.nio.ShortBuffer
+import javax.microedition.khronos.egl.EGLConfig
+import javax.microedition.khronos.opengles.GL10
+
+class ViewportSurfaceView(context: Context) : GLSurfaceView(context) {
+
+    private val renderer: ViewportRenderer
+    private val scaleDetector: ScaleGestureDetector
+    private val gestureDetector: GestureDetector
+    private var previousX: Float = 0f
+    private var previousY: Float = 0f
+
+    init {
+        setEGLContextClientVersion(2)
+        renderer = ViewportRenderer(context)
+        setRenderer(renderer)
+        renderMode = RENDERMODE_CONTINUOUSLY
+
+        scaleDetector = ScaleGestureDetector(context, object : ScaleGestureDetector.SimpleOnScaleGestureListener() {
+            override fun onScale(detector: ScaleGestureDetector): Boolean {
+                val scaleFactor = detector.scaleFactor
+                val delta = (scaleFactor - 1.0f) * 20.0f
+                renderer.onPinch(delta)
+                return true
+            }
+        })
+
+        gestureDetector = GestureDetector(context, object : GestureDetector.SimpleOnGestureListener() {
+            override fun onSingleTapUp(e: MotionEvent): Boolean {
+                val normX = (e.x / width.toFloat()) * 2.0f - 1.0f
+                val normY = 1.0f - (e.y / height.toFloat()) * 2.0f
+                renderer.onTapSelect(normX, normY)
+                return true
+            }
+        })
+    }
+
+    override fun onTouchEvent(event: MotionEvent): Boolean {
+        scaleDetector.onTouchEvent(event)
+        gestureDetector.onTouchEvent(event)
+
+        if (scaleDetector.isInProgress) {
+            return true
+        }
+
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                previousX = event.x
+                previousY = event.y
+            }
+            MotionEvent.ACTION_MOVE -> {
+                val dx = event.x - previousX
+                val dy = event.y - previousY
+                if (event.pointerCount == 1) {
+                    renderer.onDrag(dx, dy)
+                }
+                previousX = event.x
+                previousY = event.y
+            }
+        }
+        return true
+    }
+
+    fun reloadWorldCache() {
+        queueEvent {
+            renderer.loadCachedScene()
+        }
+    }
+}
+
+class ViewportRenderer(private val context: Context) : GLSurfaceView.Renderer {
+
+    private val vPMatrix = FloatArray(16)
+    private val projectionMatrix = FloatArray(16)
+    private val viewMatrix = FloatArray(16)
+    private val modelMatrix = FloatArray(16)
+    private val scratchMatrix = FloatArray(16)
+
+    private var program: Int = 0
+    private var positionHandle: Int = 0
+    private var normalHandle: Int = 0
+    private var vPMatrixHandle: Int = 0
+    private var modelMatrixHandle: Int = 0
+    private var colorHandle: Int = 0
+
+    private val meshNodes = mutableListOf<RenderNode>()
+    private var inputBridgeModule: PyObject? = null
+
+    // Fallback camera parameters synced with Python InputBridge
+    var camX = 0f
+    var camY = 3f
+    var camZ = 10f
+    var camYaw = 0f
+    var camPitch = -10f
+
+    data class RenderNode(
+        val id: String,
+        val vertexBuffer: FloatBuffer,
+        val normalBuffer: FloatBuffer,
+        val indexBuffer: ShortBuffer,
+        val indexCount: Int,
+        val color: FloatArray,
+        val posX: Float,
+        val posY: Float,
+        val posZ: Float
+    )
+
+    override fun onSurfaceCreated(gl: GL10?, config: EGLConfig?) {
+        // Pure black OLED-friendly clear color
+        GLES20.glClearColor(0.0f, 0.0f, 0.0f, 1.0f)
+        GLES20.glEnable(GLES20.GL_DEPTH_TEST)
+        GLES20.glDepthFunc(GLES20.GL_LEQUAL)
+
+        program = buildShaderProgram(VERTEX_SHADER_CODE, FRAGMENT_SHADER_CODE)
+        positionHandle = GLES20.glGetAttribLocation(program, "vPosition")
+        normalHandle = GLES20.glGetAttribLocation(program, "vNormal")
+        vPMatrixHandle = GLES20.glGetUniformLocation(program, "uMVPMatrix")
+        modelMatrixHandle = GLES20.glGetUniformLocation(program, "uModelMatrix")
+        colorHandle = GLES20.glGetUniformLocation(program, "uColor")
+
+        if (Python.isStarted()) {
+            inputBridgeModule = Python.getInstance().getModule("core_engine.input_bridge")
+        }
+
+        loadCachedScene()
+    }
+
+    override fun onSurfaceChanged(gl: GL10?, width: Int, height: Int) {
+        GLES20.glViewport(0, 0, width, height)
+        val ratio = width.toFloat() / height.toFloat()
+        Matrix.perspectiveM(projectionMatrix, 0, 45.0f, ratio, 0.1f, 300.0f)
+    }
+
+    override fun onDrawFrame(gl: GL10?) {
+        GLES20.glClear(GLES20.GL_COLOR_BUFFER_BIT or GLES20.GL_DEPTH_BUFFER_BIT)
+
+        // Calculate view matrix from camera orbit transforms
+        val yawRad = Math.toRadians(camYaw.toDouble())
+        val pitchRad = Math.toRadians(camPitch.toDouble())
+        val lookDirX = (Math.sin(yawRad) * Math.cos(pitchRad)).toFloat()
+        val lookDirY = Math.sin(pitchRad).toFloat()
+        val lookDirZ = (-Math.cos(yawRad) * Math.cos(pitchRad)).toFloat()
+
+        Matrix.setLookAtM(
+            viewMatrix, 0,
+            camX, camY, camZ,
+            camX + lookDirX, camY + lookDirY, camZ + lookDirZ,
+            0f, 1f, 0f
+        )
+        Matrix.multiplyMM(vPMatrix, 0, projectionMatrix, 0, viewMatrix, 0)
+
+        GLES20.glUseProgram(program)
+
+        synchronized(meshNodes) {
+            for (node in meshNodes) {
+                Matrix.setIdentityM(modelMatrix, 0)
+                Matrix.translateM(modelMatrix, 0, node.posX, node.posY, node.posZ)
+                Matrix.multiplyMM(scratchMatrix, 0, vPMatrix, 0, modelMatrix, 0)
+
+                GLES20.glUniformMatrix4fv(vPMatrixHandle, 1, false, scratchMatrix, 0)
+                GLES20.glUniformMatrix4fv(modelMatrixHandle, 1, false, modelMatrix, 0)
+                GLES20.glUniform3fv(colorHandle, 1, node.color, 0)
+
+                GLES20.glEnableVertexAttribArray(positionHandle)
+                GLES20.glVertexAttribPointer(positionHandle, 3, GLES20.GL_FLOAT, false, 0, node.vertexBuffer)
+
+                GLES20.glEnableVertexAttribArray(normalHandle)
+                GLES20.glVertexAttribPointer(normalHandle, 3, GLES20.GL_FLOAT, false, 0, node.normalBuffer)
+
+                GLES20.glDrawElements(GLES20.GL_TRIANGLES, node.indexCount, GLES20.GL_UNSIGNED_SHORT, node.indexBuffer)
+
+                GLES20.glDisableVertexAttribArray(positionHandle)
+                GLES20.glDisableVertexAttribArray(normalHandle)
+            }
+        }
+    }
+
+    fun onDrag(dx: Float, dy: Float) {
+        inputBridgeModule?.let { bridge ->
+            try {
+                val res = bridge.callAttr("handle_touch_drag", dx, dy).toString()
+                val json = JSONObject(res)
+                camYaw = json.getDouble("yaw").toFloat()
+                camPitch = json.getDouble("pitch").toFloat()
+            } catch (e: Exception) {
+                camYaw = (camYaw + dx * 0.25f) % 360f
+                camPitch = Math.max(-85f, Math.min(85f, camPitch - dy * 0.25f))
+            }
+        }
+    }
+
+    fun onPinch(delta: Float) {
+        inputBridgeModule?.let { bridge ->
+            try {
+                val res = bridge.callAttr("handle_touch_pinch", delta).toString()
+                val json = JSONObject(res)
+                val pos = json.getJSONArray("pos")
+                camX = pos.getDouble(0).toFloat()
+                camY = pos.getDouble(1).toFloat()
+                camZ = pos.getDouble(2).toFloat()
+            } catch (e: Exception) {
+                val yawRad = Math.toRadians(camYaw.toDouble())
+                camX += (Math.sin(yawRad) * delta * 0.05).toFloat()
+                camZ += (-Math.cos(yawRad) * delta * 0.05).toFloat()
+            }
+        }
+    }
+
+    fun onTapSelect(normX: Float, normY: Float) {
+        inputBridgeModule?.callAttr("handle_tap_pick", normX, normY)
+    }
+
+    fun loadCachedScene() {
+        val cacheFile = File(context.cacheDir, "tekivy_session/world_session_cache.json")
+        if (!cacheFile.exists()) return
+
+        try {
+            val content = cacheFile.readText()
+            val root = JSONObject(content)
+            val nodesObj = root.optJSONObject("nodes") ?: return
+
+            val newNodes = mutableListOf<RenderNode>()
+            val keys = nodesObj.keys()
+            while (keys.hasNext()) {
+                val id = keys.next()
+                val nodeData = nodesObj.getJSONObject(id)
+
+                val vArr = nodeData.getJSONArray("vertices")
+                val nArr = nodeData.getJSONArray("normals")
+                val iArr = nodeData.getJSONArray("indices")
+                val cArr = nodeData.optJSONArray("color")
+                val pArr = nodeData.optJSONArray("pos")
+
+                val vertices = FloatArray(vArr.length()) { i -> vArr.getDouble(i).toFloat() }
+                val normals = FloatArray(nArr.length()) { i -> nArr.getDouble(i).toFloat() }
+                val indices = ShortArray(iArr.length()) { i -> iArr.getInt(i).toShort() }
+                val color = if (cArr != null) {
+                    floatArrayOf(cArr.getDouble(0).toFloat(), cArr.getDouble(1).toFloat(), cArr.getDouble(2).toFloat())
+                } else {
+                    floatArrayOf(0.75f, 0.75f, 0.75f)
+                }
+
+                val posX = pArr?.getDouble(0)?.toFloat() ?: 0f
+                val posY = pArr?.getDouble(1)?.toFloat() ?: 0f
+                val posZ = pArr?.getDouble(2)?.toFloat() ?: 0f
+
+                val vBuf = ByteBuffer.allocateDirect(vertices.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
+                    put(vertices)
+                    position(0)
+                }
+                val nBuf = ByteBuffer.allocateDirect(normals.size * 4).order(ByteOrder.nativeOrder()).asFloatBuffer().apply {
+                    put(normals)
+                    position(0)
+                }
+                val iBuf = ByteBuffer.allocateDirect(indices.size * 2).order(ByteOrder.nativeOrder()).asShortBuffer().apply {
+                    put(indices)
+                    position(0)
+                }
+
+                newNodes.add(RenderNode(id, vBuf, nBuf, iBuf, indices.size, color, posX, posY, posZ))
+            }
+
+            synchronized(meshNodes) {
+                meshNodes.clear()
+                meshNodes.addAll(newNodes)
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun buildShaderProgram(vCode: String, fCode: String): Int {
+        val vShader = GLES20.glCreateShader(GLES20.GL_VERTEX_SHADER).also {
+            GLES20.glShaderSource(it, vCode)
+            GLES20.glCompileShader(it)
+        }
+        val fShader = GLES20.glCreateShader(GLES20.GL_FRAGMENT_SHADER).also {
+            GLES20.glShaderSource(it, fCode)
+            GLES20.glCompileShader(it)
+        }
+        return GLES20.glCreateProgram().also {
+            GLES20.glAttachShader(it, vShader)
+            GLES20.glAttachShader(it, fShader)
+            GLES20.glLinkProgram(it)
+        }
+    }
+
+    companion object {
+        private const val VERTEX_SHADER_CODE = """
+            uniform mat4 uMVPMatrix;
+            uniform mat4 uModelMatrix;
+            attribute vec4 vPosition;
+            attribute vec3 vNormal;
+            varying vec3 vTransNormal;
+            varying vec3 vFragPos;
+
+            void main() {
+                vFragPos = vec3(uModelMatrix * vPosition);
+                vTransNormal = normalize(mat3(uModelMatrix) * vNormal);
+                gl_Position = uMVPMatrix * vPosition;
+            }
+        """
+
+        private const val FRAGMENT_SHADER_CODE = """
+            precision mediump float;
+            uniform vec3 uColor;
+            varying vec3 vTransNormal;
+            varying vec3 vFragPos;
+
+            void main() {
+                vec3 lightPos = vec3(15.0, 30.0, 20.0);
+                vec3 lightDir = normalize(lightPos - vFragPos);
+                vec3 normal = normalize(vTransNormal);
+
+                // Ambient + Diffuse
+                float ambient = 0.25;
+                float diff = max(dot(normal, lightDir), 0.0);
+
+                // Glossy sanding-sealer specular highlight
+                vec3 viewDir = normalize(-vFragPos);
+                vec3 reflectDir = reflect(-lightDir, normal);
+                float spec = pow(max(dot(viewDir, reflectDir), 0.0), 32.0) * 0.45;
+
+                vec3 finalColor = (ambient + diff) * uColor + vec3(spec);
+                gl_FragColor = vec4(finalColor, 1.0);
+            }
+        """
+    }
+}
