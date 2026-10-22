@@ -1,0 +1,14 @@
+"""
+TeKivy Core Engine Package
+Orchestrates the embedded Python runtime, sandboxed script execution,
+procedural world caching, and GLB scene export for the Android shell.
+"""
+
+from .python_runtime import runtime, init_engine, run_project_script, export_scene_glb
+
+__all__ = [
+    "runtime",
+    "init_engine",
+    "run_project_script",
+    "export_scene_glb",
+]
