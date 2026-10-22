@@ -1,0 +1,63 @@
+"""
+TeKivy Starter Procedural World Script
+Generates a low-poly grassland scene utilizing coordinate loop wrapping
+to simulate an endless world on resource-constrained mobile hardware.
+"""
+
+import math
+import random
+
+
+def build(world):
+    # Set up the loop boundary so running across chunk bounds wraps seamlessly
+    world.set_infinite_loop(True, chunk_size=60.0)
+
+    # Base grassland terrain
+    world.add_ground(
+        size=60.0,
+        color=(0.14, 0.38, 0.18),
+        finish="sanding_sealer"
+    )
+
+    # Deterministic procedural placement of low-poly pillars and stone markers
+    rng = random.Random(42)
+    marker_count = 14
+
+    for i in range(marker_count):
+        angle = (2.0 * math.pi * i) / marker_count
+        radius = rng.uniform(8.0, 24.0)
+
+        px = math.cos(angle) * radius
+        pz = math.sin(angle) * radius
+        height = rng.uniform(2.5, 6.0)
+        thickness = rng.uniform(0.8, 1.4)
+
+        # Alternating stone and aged wood palette
+        if i % 2 == 0:
+            pillar_color = (0.62, 0.60, 0.58)
+        else:
+            pillar_color = (0.45, 0.35, 0.25)
+
+        world.add_box(
+            name=f"monolith_{i+1}",
+            pos=(px, height * 0.5, pz),
+            scale=(thickness, height, thickness),
+            color=pillar_color,
+            finish="sanding_sealer"
+        )
+
+    # Central shrine pedestal
+    world.add_box(
+        name="central_altar",
+        pos=(0.0, 0.4, 0.0),
+        scale=(3.0, 0.8, 3.0),
+        color=(0.85, 0.82, 0.78),
+        finish="sanding_sealer"
+    )
+
+
+if __name__ == "__main__":
+    # Local debugging fallback
+    from core_engine.world_manager import world_manager
+    build(world_manager)
+    print(f"Generated {len(world_manager.nodes)} nodes in scene.")
