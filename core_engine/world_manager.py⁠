@@ -1,0 +1,359 @@
+import json
+import math
+import struct
+from typing import Dict, List, Tuple, Optional, Any
+from .sandbox_runner import MemoryGuardError
+
+
+class WorldManager:
+    """
+    Manages procedural scene nodes, low-poly mesh generation, infinite-loop
+    boundary wrapping, session disk caching, and glTF 2.0 Binary (.glb) exports.
+    """
+
+    def __init__(self):
+        self.nodes: Dict[str, Dict[str, Any]] = {}
+        self.max_nodes: int = 5000
+        self.infinite_loop: bool = False
+        self.chunk_size: float = 50.0
+        self.selected_node_id: Optional[str] = None
+        self.camera_pos: List[float] = [0.0, 3.0, 10.0]
+        self.camera_yaw: float = 0.0
+        self.camera_pitch: float = -10.0
+
+    def reset_world(self, max_nodes: int = 5000) -> None:
+        self.nodes.clear()
+        self.max_nodes = max_nodes
+        self.infinite_loop = False
+        self.chunk_size = 50.0
+        self.selected_node_id = None
+
+    def _check_capacity(self) -> None:
+        if len(self.nodes) >= self.max_nodes:
+            raise MemoryGuardError(
+                f"Scene exceeded mobile memory cap ({self.max_nodes} nodes). "
+                "Use infinite-loop chunking instead of spawning more meshes."
+            )
+
+    def set_infinite_loop(self, enabled: bool = True, chunk_size: float = 50.0) -> None:
+        """
+        Enables the endless grassland illusion by wrapping coordinates at +/- chunk_size/2.
+        """
+        self.infinite_loop = bool(enabled)
+        self.chunk_size = max(10.0, float(chunk_size))
+
+    def wrap_position(self, x: float, y: float, z: float) -> List[float]:
+        """
+        Applies modular wrapping on X and Z when infinite_loop mode is active.
+        """
+        if not self.infinite_loop:
+            return [x, y, z]
+        half = self.chunk_size * 0.5
+        wrapped_x = ((x + half) % self.chunk_size) - half
+        wrapped_z = ((z + half) % self.chunk_size) - half
+        return [wrapped_x, y, wrapped_z]
+
+    def add_ground(
+        self,
+        size: float = 50.0,
+        color: Tuple[float, float, float] = (0.18, 0.45, 0.22),
+        finish: str = "sanding_sealer",
+    ) -> str:
+        """
+        Adds a flat low-poly ground plane to the procedural world.
+        """
+        return self.add_box(
+            name="ground_plane",
+            pos=(0.0, -0.1, 0.0),
+            scale=(size, 0.2, size),
+            color=color,
+            finish=finish,
+        )
+
+    def add_box(
+        self,
+        name: str,
+        pos: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        scale: Tuple[float, float, float] = (1.0, 1.0, 1.0),
+        color: Tuple[float, float, float] = (0.8, 0.8, 0.8),
+        finish: str = "sanding_sealer",
+    ) -> str:
+        """
+        Registers a low-poly box mesh node in the scene graph.
+        """
+        self._check_capacity()
+        node_id = str(name)
+        vertices, normals, indices = self._build_unit_box_geometry(scale)
+
+        self.nodes[node_id] = {
+            "id": node_id,
+            "type": "box",
+            "pos": [float(pos[0]), float(pos[1]), float(pos[2])],
+            "scale": [float(scale[0]), float(scale[1]), float(scale[2])],
+            "color": [float(color[0]), float(color[1]), float(color[2])],
+            "finish": finish,
+            "animations": [],
+            "vertices": vertices,
+            "normals": normals,
+            "indices": indices,
+        }
+        return node_id
+
+    def import_glb_node(
+        self,
+        name: str,
+        file_path: str,
+        pos: Tuple[float, float, float] = (0.0, 0.0, 0.0),
+        scale: Tuple[float, float, float] = (1.0, 1.0, 1.0),
+        animations: Optional[List[str]] = None,
+    ) -> str:
+        """
+        References an imported .glb model in the procedural world and queues animations.
+        """
+        self._check_capacity()
+        node_id = str(name)
+        vertices, normals, indices = self._build_unit_box_geometry(scale)
+
+        self.nodes[node_id] = {
+            "id": node_id,
+            "type": "glb_instance",
+            "source_path": file_path,
+            "pos": [float(pos[0]), float(pos[1]), float(pos[2])],
+            "scale": [float(scale[0]), float(scale[1]), float(scale[2])],
+            "color": [0.9, 0.9, 0.9],
+            "finish": "sanding_sealer",
+            "animations": list(animations) if animations else [],
+            "vertices": vertices,
+            "normals": normals,
+            "indices": indices,
+        }
+        return node_id
+
+    def trigger_animation(self, node_id: str, clip_name: str) -> None:
+        """
+        Allows user scripts to sequentially trigger animations on an imported GLB node.
+        """
+        if node_id in self.nodes:
+            self.nodes[node_id]["animations"].append(str(clip_name))
+
+    def select_node(self, node_id: Optional[str]) -> str:
+        """
+        Sets or clears the currently tapped object in the 3D viewport.
+        """
+        if node_id and node_id in self.nodes:
+            self.selected_node_id = node_id
+        else:
+            self.selected_node_id = None
+        return json.dumps({"selected_node": self.selected_node_id})
+
+    def save_session_cache(self, cache_file_path: str) -> None:
+        """
+        Serializes the compiled procedural world to disk for the current app session.
+        """
+        payload = {
+            "infinite_loop": self.infinite_loop,
+            "chunk_size": self.chunk_size,
+            "camera": {
+                "pos": self.camera_pos,
+                "yaw": self.camera_yaw,
+                "pitch": self.camera_pitch,
+            },
+            "nodes": self.nodes,
+        }
+        with open(cache_file_path, "w", encoding="utf-8") as f:
+            json.dump(payload, f)
+
+    def load_session_cache(self, cache_file_path: str) -> Dict[str, Any]:
+        """
+        Reads the cached procedural world into memory when the user opens the 3D Viewport.
+        """
+        with open(cache_file_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        self.infinite_loop = data.get("infinite_loop", False)
+        self.chunk_size = data.get("chunk_size", 50.0)
+        self.nodes = data.get("nodes", {})
+        return data
+
+    def export_glb(self, out_path: str, selected_node_id: Optional[str] = None) -> str:
+        """
+        Exports either the single selected object or the entire procedural world
+        into a standard binary glTF 2.0 (.glb) file.
+        """
+        target_id = selected_node_id if selected_node_id is not None else self.selected_node_id
+
+        # If a specific object is selected in the viewport, export only that object;
+        # otherwise export every visible object in the scene.
+        if target_id is not None and target_id in self.nodes:
+            export_nodes = [self.nodes[target_id]]
+        else:
+            export_nodes = list(self.nodes.values())
+
+        if not export_nodes:
+            return json.dumps({"status": "error", "error": "No geometry in scene to export."})
+
+        gltf_nodes = []
+        gltf_meshes = []
+        gltf_materials = []
+        buffer_views = []
+        accessors = []
+        bin_chunks = bytearray()
+
+        for idx, node in enumerate(export_nodes):
+            verts = node["vertices"]
+            norms = node["normals"]
+            indices = node["indices"]
+            color = node.get("color", [0.8, 0.8, 0.8])
+
+            # Pack vertices (FLOAT32 VEC3)
+            v_offset = len(bin_chunks)
+            min_v = [min(verts[i::3]) for i in range(3)]
+            max_v = [max(verts[i::3]) for i in range(3)]
+            for val in verts:
+                bin_chunks.extend(struct.pack("<f", float(val)))
+            v_length = len(bin_chunks) - v_offset
+
+            # Pack normals (FLOAT32 VEC3)
+            n_offset = len(bin_chunks)
+            for val in norms:
+                bin_chunks.extend(struct.pack("<f", float(val)))
+            n_length = len(bin_chunks) - n_offset
+
+            # Pack indices (UINT16 SCALAR) + pad to 4-byte alignment
+            i_offset = len(bin_chunks)
+            for idx_val in indices:
+                bin_chunks.extend(struct.pack("<H", int(idx_val)))
+            i_length = len(bin_chunks) - i_offset
+            while len(bin_chunks) % 4 != 0:
+                bin_chunks.extend(b"\x00")
+
+            base_bv = len(buffer_views)
+            buffer_views.extend([
+                {"buffer": 0, "byteOffset": v_offset, "byteLength": v_length, "target": 34962},
+                {"buffer": 0, "byteOffset": n_offset, "byteLength": n_length, "target": 34962},
+                {"buffer": 0, "byteOffset": i_offset, "byteLength": i_length, "target": 34963},
+            ])
+
+            v_count = len(verts) // 3
+            accessors.extend([
+                {
+                    "bufferView": base_bv,
+                    "componentType": 5126,
+                    "count": v_count,
+                    "type": "VEC3",
+                    "min": min_v,
+                    "max": max_v,
+                },
+                {
+                    "bufferView": base_bv + 1,
+                    "componentType": 5126,
+                    "count": v_count,
+                    "type": "VEC3",
+                },
+                {
+                    "bufferView": base_bv + 2,
+                    "componentType": 5123,
+                    "count": len(indices),
+                    "type": "SCALAR",
+                },
+            ])
+
+            # Glossy sanding-sealer PBR material finish
+            roughness = 0.18 if node.get("finish") == "sanding_sealer" else 0.75
+            gltf_materials.append({
+                "name": f"mat_{node['id']}",
+                "pbrMetallicRoughness": {
+                    "baseColorFactor": [color[0], color[1], color[2], 1.0],
+                    "metallicFactor": 0.05,
+                    "roughnessFactor": roughness,
+                },
+            })
+
+            gltf_meshes.append({
+                "name": f"mesh_{node['id']}",
+                "primitives": [{
+                    "attributes": {"POSITION": base_bv, "NORMAL": base_bv + 1},
+                    "indices": base_bv + 2,
+                    "material": idx,
+                }],
+            })
+
+            gltf_nodes.append({
+                "name": node["id"],
+                "mesh": idx,
+                "translation": node["pos"],
+            })
+
+        gltf_dict = {
+            "asset": {"version": "2.0", "generator": "TeKivy Mobile Engine"},
+            "scene": 0,
+            "scenes": [{"name": "TeKivyScene", "nodes": list(range(len(gltf_nodes)))}],
+            "nodes": gltf_nodes,
+            "meshes": gltf_meshes,
+            "materials": gltf_materials,
+            "buffers": [{"byteLength": len(bin_chunks)}],
+            "bufferViews": buffer_views,
+            "accessors": accessors,
+        }
+
+        json_bytes = json.dumps(gltf_dict, separators=(",", ":")).encode("utf-8")
+        while len(json_bytes) % 4 != 0:
+            json_bytes += b" "
+
+        total_length = 12 + 8 + len(json_bytes) + 8 + len(bin_chunks)
+
+        with open(out_path, "wb") as f:
+            # GLB Header (magic 'glTF', version 2, total byte length)
+            f.write(struct.pack("<III", 0x46546C67, 2, total_length))
+            # Chunk 0: JSON
+            f.write(struct.pack("<II", len(json_bytes), 0x4E4F534A))
+            f.write(json_bytes)
+            # Chunk 1: BIN
+            f.write(struct.pack("<II", len(bin_chunks), 0x004E4942))
+            f.write(bin_chunks)
+
+        return json.dumps({
+            "status": "exported",
+            "path": out_path,
+            "exported_nodes": [n["id"] for n in export_nodes],
+            "mode": "single_object" if target_id else "full_scene",
+        })
+
+    @staticmethod
+    def _build_unit_box_geometry(
+        scale: Tuple[float, float, float]
+    ) -> Tuple[List[float], List[float], List[int]]:
+        """
+        Generates 24 vertices, 24 flat-shaded normals, and 36 triangle indices for a box.
+        """
+        hx, hy, hz = scale[0] * 0.5, scale[1] * 0.5, scale[2] * 0.5
+        faces = [
+            # Front (+Z)
+            ([(-hx, -hy, hz), (hx, -hy, hz), (hx, hy, hz), (-hx, hy, hz)], (0.0, 0.0, 1.0)),
+            # Back (-Z)
+            ([(hx, -hy, -hz), (-hx, -hy, -hz), (-hx, hy, -hz), (hx, hy, -hz)], (0.0, 0.0, -1.0)),
+            # Top (+Y)
+            ([(-hx, hy, hz), (hx, hy, hz), (hx, hy, -hz), (-hx, hy, -hz)], (0.0, 1.0, 0.0)),
+            # Bottom (-Y)
+            ([(-hx, -hy, -hz), (hx, -hy, -hz), (hx, -hy, hz), (-hx, -hy, hz)], (0.0, -1.0, 0.0)),
+            # Right (+X)
+            ([(hx, -hy, hz), (hx, -hy, -hz), (hx, hy, -hz), (hx, hy, hz)], (1.0, 0.0, 0.0)),
+            # Left (-X)
+            ([(-hx, -hy, -hz), (-hx, -hy, hz), (-hx, hy, hz), (-hx, hy, -hz)], (-1.0, 0.0, 0.0)),
+        ]
+
+        vertices: List[float] = []
+        normals: List[float] = []
+        indices: List[int] = []
+
+        for face_idx, (corners, normal) in enumerate(faces):
+            base = face_idx * 4
+            for cx, cy, cz in corners:
+                vertices.extend([cx, cy, cz])
+                normals.extend([normal[0], normal[1], normal[2]])
+            indices.extend([base, base + 1, base + 2, base, base + 2, base + 3])
+
+        return vertices, normals, indices
+
+
+# Global singleton instance
+world_manager = WorldManager()
