@@ -1,0 +1,94 @@
+<?xml version="1.0" encoding="utf-8"?>
+<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#050505"
+    android:orientation="vertical">
+
+    <!-- Blender-style Datablock Header Bar -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="48dp"
+        android:background="#111111"
+        android:gravity="center_vertical"
+        android:orientation="horizontal"
+        android:paddingHorizontal="12dp">
+
+        <TextView
+            android:id="@+id/txtActiveDatablock"
+            android:layout_width="0dp"
+            android:layout_height="wrap_content"
+            android:layout_weight="1"
+            android:fontFamily="monospace"
+            android:text="procedural.py"
+            android:textColor="#E0E0E0"
+            android:textSize="13sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/btnOpenScript"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:background="?attr/selectableItemBackground"
+            android:gravity="center"
+            android:paddingHorizontal="10dp"
+            android:text="OPEN"
+            android:textColor="#A0A0A0"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/btnSaveScript"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:background="?attr/selectableItemBackground"
+            android:gravity="center"
+            android:paddingHorizontal="10dp"
+            android:text="SAVE"
+            android:textColor="#A0A0A0"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+
+        <TextView
+            android:id="@+id/btnRunScript"
+            android:layout_width="wrap_content"
+            android:layout_height="match_parent"
+            android:background="?attr/selectableItemBackground"
+            android:gravity="center"
+            android:paddingHorizontal="14dp"
+            android:text="RUN"
+            android:textColor="#D4AF37"
+            android:textSize="12sp"
+            android:textStyle="bold" />
+    </LinearLayout>
+
+    <View
+        android:layout_width="match_parent"
+        android:layout_height="1dp"
+        android:background="#222222" />
+
+    <!-- Script Input Canvas -->
+    <ScrollView
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:fillViewport="true">
+
+        <EditText
+            android:id="@+id/editorTextInput"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:background="@null"
+            android:fontFamily="monospace"
+            android:gravity="top|start"
+            android:hint="# Write procedural world generation script here..."
+            android:importantForAutofill="no"
+            android:inputType="textMultiLine|textNoSuggestions"
+            android:padding="16dp"
+            android:text="# TeKivy Procedural World Script\ndef build(world):\n    world.set_infinite_loop(True, chunk_size=50.0)\n    world.add_ground(size=50.0, color=(0.18, 0.45, 0.22), finish='sanding_sealer')\n    world.add_box(name='pillar_1', pos=(0, 1.5, 0), scale=(1, 3, 1), color=(0.75, 0.55, 0.35))\n"
+            android:textColor="#F0F0F0"
+            android:textColorHint="#4A4A4A"
+            android:textSize="13sp" />
+    </ScrollView>
+
+</LinearLayout>
