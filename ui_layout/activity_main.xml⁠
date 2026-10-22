@@ -1,0 +1,204 @@
+<?xml version="1.0" encoding="utf-8"?>
+<FrameLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="#000000">
+
+    <!-- Active Screen Content Mount -->
+    <FrameLayout
+        android:id="@+id/contentFrame"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:layout_marginBottom="56dp" />
+
+    <!-- Bottom Navigation Bar (Hidden during 3D Viewport session) -->
+    <LinearLayout
+        android:id="@+id/tabsContainer"
+        android:layout_width="match_parent"
+        android:layout_height="56dp"
+        android:layout_gravity="bottom"
+        android:background="#0A0A0A"
+        android:orientation="horizontal"
+        android:visibility="gone"
+        android:weightSum="3">
+
+        <TextView
+            android:id="@+id/tabScripting"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="SCRIPT"
+            android:textColor="#E0E0E0"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.08"
+            android:background="?attr/selectableItemBackground" />
+
+        <View
+            android:layout_width="1dp"
+            android:layout_height="match_parent"
+            android:background="#1F1F1F" />
+
+        <TextView
+            android:id="@+id/tabViewport"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="VIEWPORT"
+            android:textColor="#9E9E9E"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.08"
+            android:background="?attr/selectableItemBackground" />
+
+        <View
+            android:layout_width="1dp"
+            android:layout_height="match_parent"
+            android:background="#1F1F1F" />
+
+        <TextView
+            android:id="@+id/tabAssets"
+            android:layout_width="0dp"
+            android:layout_height="match_parent"
+            android:layout_weight="1"
+            android:gravity="center"
+            android:text="ASSETS"
+            android:textColor="#9E9E9E"
+            android:textSize="13sp"
+            android:textStyle="bold"
+            android:letterSpacing="0.08"
+            android:background="?attr/selectableItemBackground" />
+    </LinearLayout>
+
+    <!-- RAM Protection & Execution Progress Overlay -->
+    <FrameLayout
+        android:id="@+id/loadingOverlay"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#D0000000"
+        android:clickable="true"
+        android:focusable="true"
+        android:visibility="gone">
+
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:layout_marginHorizontal="32dp"
+            android:gravity="center"
+            android:orientation="vertical">
+
+            <ProgressBar
+                android:id="@+id/progressBar"
+                style="?android:attr/progressBarStyleHorizontal"
+                android:layout_width="match_parent"
+                android:layout_height="4dp"
+                android:max="100"
+                android:progress="0"
+                android:progressTint="#D4AF37" />
+
+            <TextView
+                android:id="@+id/progressLabel"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="16dp"
+                android:text="Assembling procedural world..."
+                android:textColor="#CCCCCC"
+                android:textSize="13sp"
+                android:letterSpacing="0.04" />
+        </LinearLayout>
+    </FrameLayout>
+
+    <!-- Block Puzzle Opening Splash Container -->
+    <FrameLayout
+        android:id="@+id/splashContainer"
+        android:layout_width="match_parent"
+        android:layout_height="match_parent"
+        android:background="#000000"
+        android:clickable="true"
+        android:focusable="true">
+
+        <LinearLayout
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_gravity="center"
+            android:gravity="center"
+            android:orientation="horizontal">
+
+            <TextView
+                android:id="@+id/splash_block_t"
+                android:layout_width="42dp"
+                android:layout_height="42dp"
+                android:layout_margin="3dp"
+                android:background="#1A1A1A"
+                android:gravity="center"
+                android:text="T"
+                android:textColor="#FFFFFF"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/splash_block_e"
+                android:layout_width="42dp"
+                android:layout_height="42dp"
+                android:layout_margin="3dp"
+                android:background="#1A1A1A"
+                android:gravity="center"
+                android:text="E"
+                android:textColor="#FFFFFF"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/splash_block_k"
+                android:layout_width="42dp"
+                android:layout_height="42dp"
+                android:layout_margin="3dp"
+                android:background="#1A1A1A"
+                android:gravity="center"
+                android:text="K"
+                android:textColor="#FFFFFF"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/splash_block_i"
+                android:layout_width="42dp"
+                android:layout_height="42dp"
+                android:layout_margin="3dp"
+                android:background="#1A1A1A"
+                android:gravity="center"
+                android:text="i"
+                android:textColor="#D4AF37"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/splash_block_v"
+                android:layout_width="42dp"
+                android:layout_height="42dp"
+                android:layout_margin="3dp"
+                android:background="#1A1A1A"
+                android:gravity="center"
+                android:text="v"
+                android:textColor="#D4AF37"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+
+            <TextView
+                android:id="@+id/splash_block_y"
+                android:layout_width="42dp"
+                android:layout_height="42dp"
+                android:layout_margin="3dp"
+                android:background="#1A1A1A"
+                android:gravity="center"
+                android:text="y"
+                android:textColor="#D4AF37"
+                android:textSize="20sp"
+                android:textStyle="bold" />
+        </LinearLayout>
+    </FrameLayout>
+
+</FrameLayout>
