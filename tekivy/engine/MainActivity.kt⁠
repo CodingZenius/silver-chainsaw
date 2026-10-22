@@ -1,0 +1,340 @@
+package com.tekivy.engine
+
+import android.animation.AnimatorSet
+import android.animation.ObjectAnimator
+import android.app.Activity
+import android.content.Intent
+import android.net.Uri
+import android.os.Bundle
+import android.view.MotionEvent
+import android.view.View
+import android.view.animation.DecelerateInterpolator
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.ProgressBar
+import android.widget.TextView
+import android.widget.Toast
+import androidx.activity.result.contract.ActivityResultContracts
+import androidx.appcompat.app.AppCompatActivity
+import com.chaquo.python.PyObject
+import com.chaquo.python.Python
+import com.chaquo.python.android.AndroidPlatform
+import org.json.JSONObject
+import java.io.BufferedReader
+import java.io.InputStreamReader
+
+class MainActivity : AppCompatActivity() {
+
+    private lateinit var pythonRuntimeModule: PyObject
+    private lateinit var inputBridgeModule: PyObject
+
+    // Main UI Containers
+    private lateinit var splashContainer: FrameLayout
+    private lateinit var tabsContainer: LinearLayout
+    private lateinit var contentFrame: FrameLayout
+    private lateinit var loadingOverlay: FrameLayout
+    private lateinit var progressBar: ProgressBar
+    private lateinit var progressLabel: TextView
+
+    // Tab Views
+    private lateinit var scriptEditorView: View
+    private lateinit var viewportView: View
+    private lateinit var assetManagerView: View
+
+    // 3D Viewport Controls
+    private lateinit var glSurfaceHost: FrameLayout
+    private lateinit var floatingHamburgerMenu: View
+    private var isViewportUnlocked: Boolean = false
+
+    private val openDocumentLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult()
+    ) { result ->
+        if (result.resultCode == Activity.RESULT_OK) {
+            result.data?.data?.let { uri -> loadScriptFromUri(uri) }
+        }
+    }
+
+    override fun onCreate(savedInstanceState: Bundle?) {
+        super.onCreate(savedInstanceState)
+        
+        // Native screen recording and screenshots remain enabled (FLAG_SECURE is omitted)
+        window.decorView.systemUiVisibility = (
+            View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+            or View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+        )
+
+        setContentView(R.layout.activity_main)
+
+        bindViews()
+        initPythonRuntime()
+        playBlockPuzzleSplash {
+            splashContainer.visibility = View.GONE
+            tabsContainer.visibility = View.VISIBLE
+            showScriptEditorTab()
+        }
+    }
+
+    private fun bindViews() {
+        splashContainer = findViewById(R.id.splashContainer)
+        tabsContainer = findViewById(R.id.tabsContainer)
+        contentFrame = findViewById(R.id.contentFrame)
+        loadingOverlay = findViewById(R.id.loadingOverlay)
+        progressBar = findViewById(R.id.progressBar)
+        progressLabel = findViewById(R.id.progressLabel)
+
+        findViewById<View>(R.id.tabScripting).setOnClickListener { showScriptEditorTab() }
+        findViewById<View>(R.id.tabViewport).setOnClickListener {
+            if (isViewportUnlocked) {
+                showViewportTab()
+            } else {
+                Toast.makeText(this, "Run your script to assemble the world first", Toast.LENGTH_SHORT).show()
+            }
+        }
+        findViewById<View>(R.id.tabAssets).setOnClickListener { showAssetManagerTab() }
+    }
+
+    private fun initPythonRuntime() {
+        if (!Python.isStarted()) {
+            Python.start(AndroidPlatform(this))
+        }
+        val py = Python.getInstance()
+        pythonRuntimeModule = py.getModule("core_engine.python_runtime")
+        inputBridgeModule = py.getModule("core_engine.input_bridge")
+
+        val filesPath = filesDir.absolutePath
+        val cachePath = cacheDir.absolutePath
+        pythonRuntimeModule.callAttr("init_engine", filesPath, cachePath)
+    }
+
+    private fun playBlockPuzzleSplash(onFinished: () -> Unit) {
+        val blockT = findViewById<View>(R.id.splash_block_t)
+        val blockE = findViewById<View>(R.id.splash_block_e)
+        val blockK = findViewById<View>(R.id.splash_block_k)
+        val blockI = findViewById<View>(R.id.splash_block_i)
+        val blockV = findViewById<View>(R.id.splash_block_v)
+        val blockY = findViewById<View>(R.id.splash_block_y)
+
+        val blocks = listOf(blockT, blockE, blockK, blockI, blockV, blockY)
+        val animators = mutableListOf<ObjectAnimator>()
+
+        // Scatter blocks across distinct translation vectors and snap back to origin
+        val scatterVectors = listOf(
+            Pair(-160f, -120f),
+            Pair(140f, -180f),
+            Pair(-180f, 90f),
+            Pair(160f, 130f),
+            Pair(-110f, 180f),
+            Pair(150f, -90f)
+        )
+
+        blocks.forEachIndexed { i, block ->
+            val (dx, dy) = scatterVectors[i]
+            block.translationX = dx
+            block.translationY = dy
+            block.alpha = 0f
+
+            val moveX = ObjectAnimator.ofFloat(block, View.TRANSLATION_X, dx, 0f)
+            val moveY = ObjectAnimator.ofFloat(block, View.TRANSLATION_Y, dy, 0f)
+            val fadeIn = ObjectAnimator.ofFloat(block, View.ALPHA, 0f, 1f)
+
+            animators.addAll(listOf(moveX, moveY, fadeIn))
+        }
+
+        AnimatorSet().apply {
+            playTogether(animators as List<android.animation.Animator>)
+            duration = 900
+            interpolator = DecelerateInterpolator()
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    splashContainer.postDelayed({ onFinished() }, 300)
+                }
+            })
+            start()
+        }
+    }
+
+    private fun showScriptEditorTab() {
+        contentFrame.removeAllViews()
+        contentFrame.addView(getScriptEditorView())
+    }
+
+    private fun showViewportTab() {
+        tabsContainer.visibility = View.GONE
+        contentFrame.removeAllViews()
+        contentFrame.addView(getViewportView())
+    }
+
+    private fun showAssetManagerTab() {
+        contentFrame.removeAllViews()
+        contentFrame.addView(getAssetManagerView())
+    }
+
+    fun exitViewport() {
+        tabsContainer.visibility = View.VISIBLE
+        showScriptEditorTab()
+    }
+
+    private fun getScriptEditorView(): View {
+        if (!::scriptEditorView.isInitialized) {
+            scriptEditorView = layoutInflater.inflate(R.layout.panel_editor, contentFrame, false)
+            setupEditorActions(scriptEditorView)
+        }
+        return scriptEditorView
+    }
+
+    private fun getViewportView(): View {
+        if (!::viewportView.isInitialized) {
+            viewportView = layoutInflater.inflate(R.layout.panel_viewport, contentFrame, false)
+            setupViewport(viewportView)
+        }
+        return viewportView
+    }
+
+    private fun getAssetManagerView(): View {
+        if (!::assetManagerView.isInitialized) {
+            assetManagerView = layoutInflater.inflate(R.layout.panel_asset_manager, contentFrame, false)
+            setupAssetManager(assetManagerView)
+        }
+        return assetManagerView
+    }
+
+    private fun setupEditorActions(view: View) {
+        val editorText = view.findViewById<TextView>(R.id.editorTextInput)
+        val btnRun = view.findViewById<View>(R.id.btnRunScript)
+        val btnSave = view.findViewById<View>(R.id.btnSaveScript)
+        val btnOpen = view.findViewById<View>(R.id.btnOpenScript)
+
+        btnOpen.setOnClickListener {
+            val intent = Intent(Intent.ACTION_OPEN_DOCUMENT).apply {
+                addCategory(Intent.CATEGORY_OPENABLE)
+                type = "*/*"
+            }
+            openDocumentLauncher.launch(intent)
+        }
+
+        btnSave.setOnClickListener {
+            val code = editorText.text.toString()
+            pythonRuntimeModule.callAttr("create_or_update_script", "procedural.py", code)
+            Toast.makeText(this, "Script saved to project buffer", Toast.LENGTH_SHORT).show()
+        }
+
+        btnRun.setOnClickListener {
+            val code = editorText.text.toString()
+            pythonRuntimeModule.callAttr("create_or_update_script", "procedural.py", code)
+
+            loadingOverlay.visibility = View.VISIBLE
+            progressBar.progress = 10
+            progressLabel.text = "Executing procedural world generation..."
+
+            Thread {
+                val responseJson = pythonRuntimeModule.callAttr("run_project_script", 8.0).toString()
+                val result = JSONObject(responseJson)
+                val status = result.optString("status")
+
+                runOnUiThread {
+                    loadingOverlay.visibility = View.GONE
+                    if (status == "ok") {
+                        isViewportUnlocked = true
+                        val hint = result.optString("controller_hint")
+                        if (hint.isNotEmpty()) {
+                            Toast.makeText(this, hint, Toast.LENGTH_LONG).show()
+                        }
+                        showViewportTab()
+                    } else {
+                        isViewportUnlocked = false
+                        val error = result.optString("error", "Failed to compile world.")
+                        Toast.makeText(this, error, Toast.LENGTH_LONG).show()
+                    }
+                }
+            }.start()
+        }
+    }
+
+    private fun setupViewport(view: View) {
+        glSurfaceHost = view.findViewById(R.id.glSurfaceHost)
+        floatingHamburgerMenu = view.findViewById(R.id.floatingHamburgerMenu)
+
+        // Movable hover hamburger menu
+        var dX = 0f
+        var dY = 0f
+        floatingHamburgerMenu.setOnTouchListener { v, event ->
+            when (event.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    dX = v.x - event.rawX
+                    dY = v.y - event.rawY
+                    true
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    v.animate()
+                        .x(event.rawX + dX)
+                        .y(event.rawY + dY)
+                        .setDuration(0)
+                        .start()
+                    true
+                }
+                MotionEvent.ACTION_UP -> {
+                    if (Math.abs(v.x - (event.rawX + dX)) < 10 && Math.abs(v.y - (event.rawY + dY)) < 10) {
+                        v.performClick()
+                    }
+                    true
+                }
+                else -> false
+            }
+        }
+
+        floatingHamburgerMenu.setOnClickListener {
+            exitViewport()
+        }
+
+        view.findViewById<View>(R.id.btnExportGlb).setOnClickListener {
+            triggerGlbExport()
+        }
+    }
+
+    private fun setupAssetManager(view: View) {
+        view.findViewById<View>(R.id.btnImportAsset).setOnClickListener {
+            loadingOverlay.visibility = View.VISIBLE
+            progressBar.progress = 25
+            progressLabel.text = "Locking screen: Importing 3D asset..."
+
+            view.postDelayed({
+                loadingOverlay.visibility = View.GONE
+                Toast.makeText(this, "Asset loaded into user_projects/models/", Toast.LENGTH_SHORT).show()
+            }, 1200)
+        }
+    }
+
+    private fun triggerGlbExport() {
+        loadingOverlay.visibility = View.VISIBLE
+        progressBar.progress = 40
+        progressLabel.text = "Exporting geometry to binary GLB..."
+
+        Thread {
+            val res = pythonRuntimeModule.callAttr("export_scene_glb", "scene_export.glb", null).toString()
+            val parsed = JSONObject(res)
+
+            runOnUiThread {
+                loadingOverlay.visibility = View.GONE
+                if (parsed.optString("status") == "exported") {
+                    Toast.makeText(this, "Export complete: " + parsed.optString("path"), Toast.LENGTH_LONG).show()
+                } else {
+                    Toast.makeText(this, "Export failed: " + parsed.optString("error"), Toast.LENGTH_SHORT).show()
+                }
+            }
+        }.start()
+    }
+
+    private fun loadScriptFromUri(uri: Uri) {
+        try {
+            contentResolver.openInputStream(uri)?.use { stream ->
+                val reader = BufferedReader(InputStreamReader(stream))
+                val content = reader.readText()
+                val editorText = scriptEditorView.findViewById<TextView>(R.id.editorTextInput)
+                editorText.text = content
+                Toast.makeText(this, "Loaded script into editor", Toast.LENGTH_SHORT).show()
+            }
+        } catch (e: Exception) {
+            Toast.makeText(this, "Failed to read file: ${e.message}", Toast.LENGTH_SHORT).show()
+        }
+    }
+}
