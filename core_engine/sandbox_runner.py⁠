@@ -1,0 +1,143 @@
+import io
+import time
+import sys
+import math
+import random
+import traceback
+from contextlib import redirect_stdout, redirect_stderr
+from typing import Dict, Any
+
+
+class ScriptTimeoutError(Exception):
+    """Raised when a user script exceeds the allowed execution time budget."""
+    pass
+
+
+class MemoryGuardError(Exception):
+    """Raised when a user script attempts to spawn more geometry than mobile RAM allows."""
+    pass
+
+
+class SandboxRunner:
+    """
+    Executes user Python scripts in a restricted namespace with a line-level trace timer
+    and geometry allocation limits to keep mobile memory usage under ~500MB.
+    """
+
+    SAFE_BUILTINS = {
+        "abs": abs,
+        "all": all,
+        "any": any,
+        "bool": bool,
+        "dict": dict,
+        "enumerate": enumerate,
+        "filter": filter,
+        "float": float,
+        "int": int,
+        "isinstance": isinstance,
+        "len": len,
+        "list": list,
+        "map": map,
+        "max": max,
+        "min": min,
+        "pow": pow,
+        "print": print,
+        "range": range,
+        "round": round,
+        "set": set,
+        "sorted": sorted,
+        "str": str,
+        "sum": sum,
+        "tuple": tuple,
+        "zip": zip,
+        "Exception": Exception,
+        "ValueError": ValueError,
+        "TypeError": TypeError,
+    }
+
+    def __init__(self, timeout: float = 8.0, max_nodes: int = 5000):
+        self.timeout = timeout
+        self.max_nodes = max_nodes
+        self._start_time = 0.0
+
+    def _trace_guard(self, frame, event, arg):
+        """
+        Trace callback invoked by the Python interpreter on every line and call event.
+        """
+        if event in ("line", "call"):
+            if (time.monotonic() - self._start_time) > self.timeout:
+                raise ScriptTimeoutError(
+                    f"Script execution exceeded the {self.timeout:.1f}s mobile safety limit."
+                )
+        return self._trace_guard
+
+    def run_code(self, code: str, filename: str, world_manager: Any) -> Dict[str, Any]:
+        """
+        Compiles and executes the user script, passing the `world_manager` API
+        either directly in globals (`world`) or via an optional `build(world)` entry function.
+        """
+        stdout_buf = io.StringIO()
+        stderr_buf = io.StringIO()
+
+        # Reset the scene state before building the new procedural world
+        world_manager.reset_world(max_nodes=self.max_nodes)
+
+        sandbox_globals = {
+            "__builtins__": self.SAFE_BUILTINS,
+            "__name__": "__main__",
+            "math": math,
+            "random": random,
+            "world": world_manager,
+        }
+
+        self._start_time = time.monotonic()
+        previous_trace = sys.gettrace()
+
+        try:
+            compiled = compile(code, filename, "exec")
+
+            with redirect_stdout(stdout_buf), redirect_stderr(stderr_buf):
+                sys.settrace(self._trace_guard)
+                exec(compiled, sandbox_globals)
+
+                # If the user defined a `build(world)` function, invoke it automatically
+                build_fn = sandbox_globals.get("build")
+                if callable(build_fn):
+                    build_fn(world_manager)
+
+            return {
+                "status": "ok",
+                "stdout": stdout_buf.getvalue(),
+                "stderr": stderr_buf.getvalue(),
+                "node_count": len(world_manager.nodes),
+            }
+
+        except (ScriptTimeoutError, MemoryGuardError) as guard_err:
+            world_manager.reset_world(max_nodes=self.max_nodes)
+            return {
+                "status": "error",
+                "error": str(guard_err),
+                "stdout": stdout_buf.getvalue(),
+            }
+
+        except SyntaxError as syn_err:
+            return {
+                "status": "error",
+                "error": f"SyntaxError on line {syn_err.lineno}: {syn_err.msg}",
+                "stdout": stdout_buf.getvalue(),
+            }
+
+        except Exception as exc:
+            world_manager.reset_world(max_nodes=self.max_nodes)
+            tb_lines = traceback.format_exception(type(exc), exc, exc.__traceback__)
+            clean_tb = "".join(
+                line for line in tb_lines if "sandbox_runner.py" not in line
+            )
+            return {
+                "status": "error",
+                "error": clean_tb.strip(),
+                "stdout": stdout_buf.getvalue(),
+            }
+
+        finally:
+            sys.settrace(previous_trace)
